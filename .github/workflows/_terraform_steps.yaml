@@ -1,0 +1,155 @@
+on:
+    workflow_call:
+      inputs:
+        module_folder:
+          required: true
+          type: string
+        env:
+          required: true
+          type: string
+        # centralizes the mapping from env to specific IDP and SA. An alternative would be for the
+        # caller to provide them as inputs.
+        # Need  to define IDP for those projects
+        _cfg:
+          type: string
+          default: >-
+            {
+              "dlk-common": {
+              "dev": {
+                "idp": "",
+                "ci_sa": ""
+              },
+              "prod": {
+                "idp":"",
+                "ci_sa": ""
+              }
+              },
+              "dwh": {
+              "dev": {
+                "idp": "",
+                "ci_sa": ""
+              },
+              "prod": {
+                "idp":"",
+                "ci_sa": ""
+              }
+              },
+              "data-platform-pbi": {
+              "dev": {
+                "idp": "",
+                "ci_sa": ""
+              },
+              "prod": {
+                "idp":"",
+                "ci_sa": ""
+              }
+              }
+            }
+
+env:
+  idp: ${{ fromJSON(inputs._cfg)[inputs.module_folder][inputs.env]['idp'] }}
+  ci_sa: ${{ fromJSON(inputs._cfg)[inputs.module_folder][inputs.env]['ci_sa'] }}
+  tf_version: 1.5.7
+  plan_name: terraform_plan
+  TF_IN_AUTOMATION: 1
+
+
+jobs:
+  tf_plan:
+    name: 1. Plan
+    defaults:
+      run:
+        working-directory: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}
+    # This is a self-hosted runner hosted by Tactiq team. The data-gu one is dedicated to the data platform jobs.
+    # More info here: https://confluence.keringapps.com/display/GDS/Github+Runners+Label
+    runs-on: ubuntu-latest
+
+    outputs:
+      plan_has_changes: ${{ steps.plan.outputs.plan_has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.tf_version }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt, init and validate
+        run: |
+          terraform fmt -recursive -check -diff
+          terraform init -input=false
+          terraform validate
+
+      - name: Plan Terraform
+        id: plan
+        shell: bash
+        run: |
+          set +e
+          terraform plan -out=${{ env.plan_name }} -detailed-exitcode
+          exitcode=$?
+          if [[ $exitcode -eq 2 ]]; then
+            echo "plan_has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          exit $exitcode
+
+      - name: Export plan summary
+        if: steps.plan.outputs.plan_has_changes == 'true'
+        run: |
+          terraform show ${{ env.plan_name }} > plan_log.txt
+          echo '# Terraform plan' >> $GITHUB_STEP_SUMMARY
+          echo '```hcl' >> $GITHUB_STEP_SUMMARY
+          # Strip color codes
+          sed 's/\x1B\[[0-9;]*m//g' plan_log.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Store tf plan
+        if: steps.plan.outputs.plan_has_changes == 'true' && github.ref_protected
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.plan_name }}
+          path: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}/${{ env.plan_name }}
+
+  tf_apply:
+    name: 2. Apply
+    # To launch the apply we need:
+    # - to have something in the plan
+    # - to be in on a protected branch (main)
+    if: >-
+      needs.tf_plan.outputs.plan_has_changes == 'true' && (github.ref_protected || ${{ inputs.env }} == 'dev')
+    defaults:
+      run:
+        working-directory: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}
+    # This is a self-hosted runner hosted by Tactiq team. The data-gu one is dedicated to the data platform jobs.
+    # More info here: https://confluence.keringapps.com/display/GDS/Github+Runners+Label
+    runs-on: data-gu-v1
+
+    needs:
+      - tf_plan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Auth as ${{ env.ci_sa }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.idp }}
+          service_account: ${{ env.ci_sa }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.tf_version }}
+          terraform_wrapper: false
+
+      - name: Download terraform plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.plan_name }}
+          path: ./terraform/live
+
+      - name: Terraform apply
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve ${{ env.plan_name }}

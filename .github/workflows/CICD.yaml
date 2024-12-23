@@ -1,0 +1,20 @@
+name: cicd
+on:
+  pull_request:
+  push:
+    branches:
+      - "main"
+
+# redefining permissions removes the defaults
+permissions:
+  contents: read # still allow checking out the repo
+  id-token: write # use oidc to exchange github token for gcp service account
+
+jobs:
+  tf_plan:
+    name: terraform plan for data platform pbi prod
+    uses: ./.github/workflows/_terraform_steps.yaml
+    secrets: inherit
+    with:
+      module_folder: "data-platform-pbi"
+      env: "prod"
