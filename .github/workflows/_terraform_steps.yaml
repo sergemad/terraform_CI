@@ -50,7 +50,7 @@ env:
   idp: ${{ fromJSON(inputs._cfg)[inputs.module_folder][inputs.env]['idp'] }}
   ci_sa: ${{ fromJSON(inputs._cfg)[inputs.module_folder][inputs.env]['ci_sa'] }}
   tf_version: 1.5.7
-  plan_name: terraform_plan
+  plan_name: terraform_plan_${{ inputs.module_folder }}_${{ inputs.env }}
   TF_IN_AUTOMATION: 1
 
 
@@ -106,11 +106,11 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Store tf plan
-        if: steps.plan.outputs.plan_has_changes == 'true' && github.ref_protected
+        if: steps.plan.outputs.plan_has_changes == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.plan_name }}
-          path: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}/${{ env.plan_name }}
+          path: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}
 
   tf_apply:
     name: 2. Apply
@@ -118,24 +118,19 @@ jobs:
     # - to have something in the plan
     # - to be in on a protected branch (main)
     if: >-
-      needs.tf_plan.outputs.plan_has_changes == 'true' && (github.ref_protected || ${{ inputs.env }} == 'dev')
+      needs.tf_plan.outputs.plan_has_changes == 'true' && (github.ref == 'refs/heads/main' || ${{ inputs.env }} == 'dev')
     defaults:
       run:
         working-directory: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}
     # This is a self-hosted runner hosted by Tactiq team. The data-gu one is dedicated to the data platform jobs.
     # More info here: https://confluence.keringapps.com/display/GDS/Github+Runners+Label
-    runs-on: data-gu-v1
+    runs-on: ubuntu-latest
 
     needs:
       - tf_plan
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Auth as ${{ env.ci_sa }}
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ env.idp }}
-          service_account: ${{ env.ci_sa }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -147,7 +142,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.plan_name }}
-          path: ./terraform/live
+          path: ./terraform/${{ inputs.module_folder }}/${{ inputs.env }}
 
       - name: Terraform apply
         run: |
