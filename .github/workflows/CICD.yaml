@@ -12,9 +12,35 @@ permissions:
 
 jobs:
   tf_plan:
-    name: terraform plan for data platform pbi prod
+    name: Terraform Plan
     uses: ./.github/workflows/_terraform_steps.yaml
     secrets: inherit
+    strategy:
+      matrix:
+        module_folder:
+          - "data-platform-pbi"
+          - "dlk-common"
+          - "dwh"
+        env:
+          - dev
+          - prod
     with:
-      module_folder: "data-platform-pbi"
-      env: "prod"
+      module_folder: ${{ matrix.module_folder }}
+      env: ${{ matrix.env }}
+
+
+  # tf_plan_dev:
+  #   name: terraform plan for data platform pbi dev
+  #   uses: ./.github/workflows/_terraform_steps.yaml
+  #   secrets: inherit
+  #   with:
+  #     module_folder: "data-platform-pbi"
+  #     env: "dev"
+
+  # tf_plan_prod:
+  #   name: terraform plan for data platform pbi prod
+  #   uses: ./.github/workflows/_terraform_steps.yaml
+  #   secrets: inherit
+  #   with:
+  #     module_folder: "data-platform-pbi"
+  #     env: "prod"
